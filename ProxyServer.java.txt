@@ -1,0 +1,277 @@
+
+	import java.io.BufferedReader;
+	import java.io.BufferedWriter;
+	import java.io.DataOutputStream;
+	import java.io.File;
+	import java.io.FileReader;
+	import java.io.FileWriter;
+	import java.io.IOException;
+	import java.io.InputStreamReader;
+	import java.io.OutputStreamWriter;
+	import java.net.InetAddress;
+	import java.net.ServerSocket;
+	import java.net.Socket;
+	import java.net.URL;
+	import java.net.URLConnection;
+	import java.net.UnknownHostException;
+	import java.util.StringTokenizer;
+
+
+
+	public class ProxyServer extends Thread{
+		//default Ip address
+		private static String ipAddress="127.0.0.1";
+		//default Port
+		private static String  port="8080";
+		
+		private Socket clientSocket = null;
+		//Client Ouput Stream
+		DataOutputStream out = null;
+		//Client input Stream
+		BufferedReader in = null;
+		
+		
+		public ProxyServer(Socket cSocket) {
+			// TODO Auto-generated constructor stub
+			clientSocket=cSocket;
+		}
+		public void run() {	
+			try {
+				// get the Client's output and input Stream
+				out =new DataOutputStream(clientSocket.getOutputStream());
+				in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+				// read the request first line
+				String cLine = in.readLine();
+				//Make sure the Request is not Empty;
+				System.out.println(cLine);
+				if(cLine != null){
+					StringTokenizer tokenizer = new StringTokenizer(cLine);
+					//get the  request Method..Could be any GET, POST, PUT. DELETE
+					String requestMethod = tokenizer.nextToken();
+
+					//get the request query String..
+					String queryString = tokenizer.nextToken();
+					// get the request
+					URL rURL=null;
+					if(queryString.startsWith("/")){
+						rURL= new URL("http:/"+queryString);
+						
+					}
+					if(queryString.startsWith("http")){
+						rURL = new URL(queryString);
+					}
+					System.out.println("queryString: "+queryString);
+					System.out.println("Request URL: "+rURL);
+					//check for POST method...
+					
+					if(requestMethod.equalsIgnoreCase("POST")){
+						// implementing the POST HTTP Method
+						int postDataI = -1;
+						//Check if Post Data exists..
+						 while ((cLine = in.readLine()) != null && (cLine.length() != 0)) {
+							 if (cLine.indexOf("Content-Length:") > -1) {
+								 postDataI = new Integer(
+										 cLine.substring(
+												 cLine.indexOf("Content-Length:") + 16,
+												 cLine.length())).intValue();
+							 }
+						 }
+						 //read the post data
+						 String postData = "";
+						 if (postDataI > 0) {
+							 char[] charArray = new char[postDataI];
+							 in.read(charArray, 0, postDataI);
+							 postData = new String(charArray);
+						 }
+						 System.out.println("PostData: "+postData);
+						 sendPostData(rURL, postData, out);
+					}
+					//check the GET method...
+					
+					if(requestMethod.equalsIgnoreCase("GET")){
+						System.out.println("get Host: "+rURL.getHost());
+						System.out.println("get FIleL: "+rURL.getFile());
+						if(checkCacheExists(rURL)){
+							//if Cache Exists. Read and send the contents..
+							System.out.println("File Exist in Cache.. Reading fro Cache.");
+							readFromCache(rURL,out);
+						}else{
+							System.out.println("Reading from Server..");
+							getFromServer(rURL, out);
+						}
+						
+					}else{
+						//Error handling for method other then GET and GET
+						out.writeBytes("HTTP/1.0 405 \n");
+						out.writeBytes("Content-Type: text/html\n");
+						out.writeBytes("\n");
+						out.writeBytes("ONLY GET and POST is allowed for now..");
+						out.writeBytes("\n");
+						out.flush();
+					}
+					
+				}
+
+				
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+		//check if Cache Exists
+			public boolean checkCacheExists(URL  rURL ){
+				String localFile=null;
+				StringTokenizer st=new StringTokenizer(rURL.getFile(), "/");
+				 while (st.hasMoreTokens()){
+					 localFile=st.nextToken();
+				 }    
+				if(localFile == null){
+					localFile=rURL.getHost();
+				}else{
+					localFile=rURL.getHost()+"_"+localFile;
+				}		
+				 File cacheFile= new File(localFile);
+				 if(cacheFile.exists()){
+					 return true;
+				 }
+				 return false;
+			}
+			// get the data from Cache
+			public void readFromCache(URL rURL, DataOutputStream out){
+				String localFile=null;
+				StringTokenizer st=new StringTokenizer(rURL.getFile(), "/");
+				 while (st.hasMoreTokens()){
+					 localFile=st.nextToken();
+				 }    
+				if(localFile == null){
+					localFile=rURL.getHost();
+				}else{
+					localFile=rURL.getHost()+"_"+localFile;
+				}		
+				 String sCurrentLine;
+				 try {
+					BufferedReader br = new BufferedReader(new FileReader(localFile));
+					out.writeBytes("HTTP/1.0 200 \n");
+					out.writeBytes("Content-Type: text/html\n");
+					out.writeBytes("\n");
+					//out.flush();
+					while ((sCurrentLine = br.readLine()) != null) {
+						out.writeBytes(sCurrentLine);
+					 }
+					out.writeBytes("\n");
+					out.flush();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+		
+			
+		}
+		//POST Method
+		public void sendPostData(URL  rURL,String postData, DataOutputStream out){	
+			
+				try {
+					URLConnection conn = rURL.openConnection();
+					conn.setDoOutput(true);
+					BufferedWriter wr = new BufferedWriter(new OutputStreamWriter(conn.getOutputStream(), "UTF8"));
+					wr.write("POST " + rURL + " HTTP/1.0\r\n");
+				    wr.write("Content-Length: " + postData + "\r\n");
+				    wr.write("\r\n");
+					wr.write(postData);
+					wr.flush();
+					
+					BufferedReader rd = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+					String line;
+					out.writeBytes("HTTP/1.0 200 \n");
+					out.writeBytes("Content-Type: text/html\n");
+					out.writeBytes("\n");
+					while ((line = rd.readLine()) != null) {
+							out.writeBytes(line);
+				    }
+					out.writeBytes("\n");
+					out.flush();
+				    wr.close();
+				    rd.close();
+					 
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			
+		}
+		
+		
+	    //GET Method
+		public void getFromServer(URL  rURL,DataOutputStream out ){
+			try {
+				URLConnection conn = rURL.openConnection();
+				//Read the Stream and store in Buffer..
+				BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+				String line;
+				
+				String localFile=null;
+				StringTokenizer st=new StringTokenizer(rURL.getFile(), "/");
+				 while (st.hasMoreTokens())
+	                 localFile=st.nextToken();
+				if(localFile == null){
+					localFile=rURL.getHost();
+				}else{
+					localFile=rURL.getHost()+"_"+localFile;
+				}
+				
+				System.out.println("Localhost File: "+localFile);
+				out.writeBytes("HTTP/1.0 200 \n");
+				out.writeBytes("Content-Type: text/html\n");
+				out.writeBytes("\n");
+				FileWriter fw = new FileWriter(localFile);
+				BufferedWriter bw = new BufferedWriter(fw);
+				while ((line = br.readLine()) != null) {
+					bw.write(line);
+					//also output the data to Client aswell
+					out.writeBytes(line);
+				}
+				out.writeBytes("\n");
+				out.flush();
+				//close the Buffer for file
+				bw.close();
+				//close the buffer for serves..
+				br.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+		public static void main(String[] args) {
+			if ((args.length == 2)){
+				ipAddress=args[0];
+				port =args[1];
+			}
+			ServerSocket serverSocket;
+			try {
+				serverSocket = new ServerSocket(Integer.parseInt(port),50, InetAddress.getByName(ipAddress));
+				System.out.println("Listening..");
+				while(true) {
+					 Socket cSocket = serverSocket.accept();
+					 System.out.println("Ready to Serve");
+					 //implementing multhiThreading..
+					 ProxyServer proxyServer = new ProxyServer(cSocket);
+					 proxyServer.start();
+				}
+			} catch (NumberFormatException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (UnknownHostException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+		
+	}
+
+
